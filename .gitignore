@@ -1,0 +1,6 @@
+node_modules/
+dist/
+.DS_Store
+
+# Reassembled exactly from model-parts before build/dev
+public/models/shelf-with-slots.glb
