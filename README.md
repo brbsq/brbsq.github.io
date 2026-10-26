@@ -20,7 +20,7 @@ Push to `main` to build and deploy through `.github/workflows/pages.yml`. GitHub
 
 ## Assets and browser support
 
-All ten supplied GLBs are preserved in `public/models/`. The combined model contains the shelf and six occupied cases; T4 and B2 are empty slots. The original shader source and features metadata in `shader/` match the supplied ZIP byte-for-byte. A small WebGPU host supplies the Figma layer parameters and maps editor-only property metadata to a no-op.
+All ten supplied GLBs are preserved. Nine are tracked in `public/models/`; the combined shelf is stored in `model-parts/` and reassembled into `public/models/shelf-with-slots.glb` by the `prebuild` and `predev` scripts. Reassembly verifies the original file size and SHA-256 before writing. The combined model contains the shelf and six occupied cases; T4 and B2 are empty slots. The original shader source and features metadata in `shader/` match the supplied ZIP byte-for-byte. A small WebGPU host supplies the Figma layer parameters and maps editor-only property metadata to a no-op.
 
 The animated background requires WebGPU; unsupported browsers display a plain blue background with a compatibility note. The 3D shelf uses WebGL. Google Sans Flex is used when installed, with Arial as fallback. Physical mobile-device behavior and all external project destinations have not been verified.
 
