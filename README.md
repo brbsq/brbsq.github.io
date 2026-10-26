@@ -25,3 +25,11 @@ All ten supplied GLBs are preserved. Nine are tracked in `public/models/`; the c
 The animated background requires WebGPU; unsupported browsers display a plain blue background with a compatibility note. The 3D shelf uses WebGL. Google Sans Flex is used when installed, with Arial as fallback. Physical mobile-device behavior and all external project destinations have not been verified.
 
 Production builds and syntax checks passed. Browser checks covered shelf rendering, the original animated shader, popup content and blur, focus restoration, and the case highlight under keyboard focus.
+
+## Rendering performance
+
+The background continues to animate at a 60 FPS target. Its authored WGSL and Figma parameters are unchanged; the build adapter reduces sphere tessellation from 150,528 to 37,632 triangles, removes redundant MSAA for the already-blurred background, and reuses a single depth attachment. Background resolution is capped at 0.85 CSS pixels per axis; shelf and case canvases retain up to 1.5 device pixels per CSS pixel. Glass transmission uses a half-resolution intermediate buffer.
+
+Static shelf and popup canvases redraw only when their contents change; dragging, hover motion and popup travel still animate on each frame. Transparent blur is composited on the source layers instead of repeatedly capturing the moving backdrop. Cursor light moves with a composited transform. Hidden documents skip rendering and reduced-motion backgrounds render only when needed.
+
+Verification: `node --test scripts/optimize-shader.test.mjs` checks unchanged WGSL and valid, reusable single-sample attachments. `npm run build` passes. Local browser measurements at 1280×720 recorded 60 FPS before and after; the idle shelf fell from roughly 720 draws in 12 seconds to two initial draws, and a settled popup stopped after its transition. Background animation, popup blur, close/focus restoration, shelf rotation, and case focus glow/lift were visually checked. These timings describe the test Mac, not a guarantee for every device. Append `?perf=1` to collect optional frame and draw counters in the document's `data-performance` attribute.

@@ -38,3 +38,9 @@ h1:hover{filter:drop-shadow(0 1px 0 #3388b84d) drop-shadow(0 2px 0 #246a9838) dr
 
 /* Hover illumination is rendered with the 3D cases, not their hit rectangles. */
 #projects button:hover,#projects button:focus-visible{box-shadow:none;background:transparent;outline:none}
+
+/* Cache the static shelf blur separately from the animated background. */
+#detail{backdrop-filter:none;-webkit-backdrop-filter:none}
+#scene{filter:blur(calc(var(--reveal,0) * 28px))}
+#shader-background{filter:blur(calc(4px + var(--reveal,0) * 24px))}
+.cursor-light{left:0;top:0;transform:translate3d(-500px,-500px,0);will-change:transform,opacity}

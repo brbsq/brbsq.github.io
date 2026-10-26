@@ -1,4 +1,5 @@
 import {setup,render} from './main.ts';
+import {recordFrame,countDraw} from '../performance.js';
 // Exact layer parameters from Figma node 2:3, rather than library defaults.
 export const params={
  intensity:3.0899999141693115,
@@ -30,7 +31,11 @@ export async function startBackground(canvas){
   if(errors.length)throw new Error(errors.map(m=>m.message).join('\n'));
   const setupError=await device.popErrorScope();if(setupError)throw setupError;
   const reduced=matchMedia('(prefers-reduced-motion: reduce)');
-  function resize(){const ratio=Math.min(devicePixelRatio,1.5);canvas.width=Math.max(1,Math.round(innerWidth*ratio));canvas.height=Math.max(1,Math.round(innerHeight*ratio))}
+  // The background is deliberately soft; reserve sharp pixels for the cases.
+  const resolutionScale=.85;
+  let needsDraw=true,lastDraw=-Infinity;
+  function resize(){const ratio=Math.min(devicePixelRatio,1)*resolutionScale;canvas.width=Math.max(1,Math.round(innerWidth*ratio));canvas.height=Math.max(1,Math.round(innerHeight*ratio));needsDraw=true}
+  reduced.addEventListener('change',()=>{needsDraw=true});
   resize();addEventListener('resize',resize);
   device.addEventListener('uncapturederror',event=>{stopped=true;unavailable('Animated background could not render on this device.');console.error(event.error)});
   device.lost.then(info=>{stopped=true;unavailable('Animated background lost GPU access. Reload to retry.');console.warn(info.message)});
@@ -40,8 +45,10 @@ export async function startBackground(canvas){
   let speedDuration=8000+Math.random()*6000;
   function draw(time){
    if(stopped)return;
+   recordFrame(time);
    const elapsed=Math.min(Math.max(time-lastTime,0),100);lastTime=time;
-   if(!document.hidden){
+   if(!document.hidden&&(!reduced.matches||needsDraw)&&time-lastDraw>=1000/60-2){
+    lastDraw=time;needsDraw=false;
     if(!reduced.matches){
      speedElapsed=Math.min(speedElapsed+elapsed,speedDuration);
      const phase=speedElapsed/speedDuration;
@@ -52,7 +59,7 @@ export async function startBackground(canvas){
      if(phase===1){speedFrom=speedTo;speedTo=randomSpeed();speedElapsed=0;speedDuration=8000+Math.random()*6000}
     }
     frame.time=reduced.matches?0:shaderTime;
-    frame.output=context.getCurrentTexture();render(device,frame);canvas.dataset.state='rendering';
+    frame.output=context.getCurrentTexture();render(device,frame);countDraw('backgroundDraws');canvas.dataset.state='rendering';
    }
    requestAnimationFrame(draw);
   }

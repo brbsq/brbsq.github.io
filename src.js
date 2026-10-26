@@ -1,4 +1,6 @@
 import './style.css';
+import {countDraw} from './performance.js';
+let pendingCursorLight=false,cursorX=0,cursorY=0;
 import {startBackground} from './shader/background.js';
 startBackground(document.querySelector('#shader-background'));
 import * as THREE from 'three';
@@ -9,6 +11,7 @@ const dialog=document.querySelector('#detail');
 const reduced=matchMedia('(prefers-reduced-motion: reduce)');
 let renderer,scene,camera,model,previewRenderer,previewCamera,casePivot,selected,activeButton;
 let progress=0,target=0,lastTime=0;
+let sceneDirty=true,popupDirty=true,pointerDirty=true;
 const objects=new Map(),buttons=new Map(),previewScene=new THREE.Scene();
 const fromPosition=new THREE.Vector3(),toPosition=new THREE.Vector3(),flightOrigin=new THREE.Vector3();
 const transitionSeconds=0.65;
@@ -37,16 +40,26 @@ function installCaseEffects(slot,obj){
  const shadowMaterial=new THREE.ShaderMaterial({transparent:true,depthWrite:false,side:THREE.DoubleSide,uniforms:{strength},vertexShader,fragmentShader:'varying vec2 point;uniform float strength;void main(){vec2 p=(point-.5)*2.0;float soft=exp(-dot(p,p)*4.0)*(1.0-smoothstep(.7,1.0,length(p)));gl_FragColor=vec4(.035,.09,.15,soft*strength*.252);}'});
  const shadow=new THREE.Mesh(new THREE.PlaneGeometry(size.x*1.75,.035),shadowMaterial);
  shadow.position.set(center.x,bounds.min.y-.006,bounds.max.z+.001);group.add(shadow);
+ group.visible=false;
  caseEffects.set(slot,{group,halo,shadow,strength,centerY:center.y});
 }
 
+function settle(value,target,rate,dt,epsilon=0.00001){
+ return reduced.matches||Math.abs(value-target)<epsilon?target:THREE.MathUtils.damp(value,target,rate,dt);
+}
 function updateCaseHover(dt){
  for(const [slot,obj] of objects){
   const effect=caseEffects.get(slot);
-  if(dialog.open&&obj===selected){if(effect)effect.strength.value=0;continue;}
+  if(dialog.open&&obj===selected){if(effect&&effect.group.visible){effect.group.visible=false;effect.strength.value=0;sceneDirty=true}continue}
   const lift=(!dialog.open&&!drag?.moved&&slot===hoveredSlot) ? .018 : 0;
-  obj.position.y=THREE.MathUtils.damp(obj.position.y,caseRestY.get(slot)+lift,12,dt);
-  if(effect){effect.halo.position.y=effect.centerY+obj.position.y-caseRestY.get(slot);effect.strength.value=THREE.MathUtils.damp(effect.strength.value,lift>0?1:0,12,dt);}
+  const y=settle(obj.position.y,caseRestY.get(slot)+lift,12,dt);
+  if(y!==obj.position.y){obj.position.y=y;sceneDirty=true}
+  if(effect){
+   effect.halo.position.y=effect.centerY+y-caseRestY.get(slot);
+   const strength=settle(effect.strength.value,lift>0?1:0,12,dt,.001);
+   if(strength!==effect.strength.value){effect.strength.value=strength;sceneDirty=true}
+   effect.group.visible=strength>0;
+  }
  }
 }
 const main=document.querySelector('main');
@@ -54,9 +67,9 @@ const main=document.querySelector('main');
 const shelfGlow={pointer:{value:new THREE.Vector2(-10000,-10000)},radius:{value:100},strength:{value:0}};
 const hoverPointer=new THREE.Vector2();let pointerOnShelf=false;
 const hoverRay=new THREE.Raycaster(),localRay=new THREE.Ray(),localPoint=new THREE.Vector3(),inverseShelf=new THREE.Matrix4();
-main.addEventListener('pointermove',e=>{hoverPointer.set(e.clientX,e.clientY);pointerOnShelf=e.pointerType!=='touch'&&!e.target.closest('h1')});
-main.addEventListener('pointerleave',()=>{pointerOnShelf=false});
-addEventListener('blur',()=>{pointerOnShelf=false});
+main.addEventListener('pointermove',e=>{hoverPointer.set(e.clientX,e.clientY);pointerDirty=true;pointerOnShelf=e.pointerType!=='touch'&&!e.target.closest('h1')});
+main.addEventListener('pointerleave',()=>{pointerOnShelf=false;pointerDirty=true});
+addEventListener('blur',()=>{pointerOnShelf=false;pointerDirty=true});
 function installShelfGlow(){
  model.getObjectByName('Shelf_Structure')?.traverse(mesh=>{
   if(!mesh.isMesh)return;
@@ -78,18 +91,25 @@ function installShelfGlow(){
   mesh.material=Array.isArray(mesh.material)?mesh.material.map(enhance):enhance(mesh.material);
  });
 }
+let shelfGlowTarget=0;
+const normalizedPointer=new THREE.Vector2();
 function updateShelfGlow(dt){
- let inside=false;
- if(pointerOnShelf&&shelfPivot&&!dialog.open){
-  hoverRay.setFromCamera(new THREE.Vector2(hoverPointer.x/innerWidth*2-1,1-hoverPointer.y/innerHeight*2),camera);
-  inverseShelf.copy(model.matrixWorld).invert();localRay.copy(hoverRay.ray).applyMatrix4(inverseShelf);
-  const hit=localRay.intersectPlane(new THREE.Plane(new THREE.Vector3(0,0,1),0),localPoint);
-  inside=!!hit&&Math.abs(localPoint.x)<.68&&localPoint.y>-.015&&localPoint.y<.59;
+ if(pointerDirty){
+  let inside=false;
+  if(pointerOnShelf&&shelfPivot&&!dialog.open){
+   normalizedPointer.set(hoverPointer.x/innerWidth*2-1,1-hoverPointer.y/innerHeight*2);
+   hoverRay.setFromCamera(normalizedPointer,camera);
+   inverseShelf.copy(model.matrixWorld).invert();localRay.copy(hoverRay.ray).applyMatrix4(inverseShelf);
+   const hit=localRay.intersectPlane(new THREE.Plane(new THREE.Vector3(0,0,1),0),localPoint);
+   inside=!!hit&&Math.abs(localPoint.x)<.68&&localPoint.y>-.015&&localPoint.y<.59;
+  }
+  const pixelRatio=renderer.getPixelRatio();
+  shelfGlow.pointer.value.set(hoverPointer.x*pixelRatio,(innerHeight-hoverPointer.y)*pixelRatio);
+  shelfGlow.radius.value=Math.max(65,Math.min(innerWidth,innerHeight)*.15)*pixelRatio;
+  shelfGlowTarget=inside?1.10:0;pointerDirty=false;sceneDirty=true;
  }
- const pixelRatio=renderer.getPixelRatio();
- shelfGlow.pointer.value.set(hoverPointer.x*pixelRatio,(innerHeight-hoverPointer.y)*pixelRatio);
- shelfGlow.radius.value=Math.max(65,Math.min(innerWidth,innerHeight)*.15)*pixelRatio;
- shelfGlow.strength.value=THREE.MathUtils.damp(shelfGlow.strength.value,inside?1.10:0,9,dt);
+ const strength=settle(shelfGlow.strength.value,shelfGlowTarget,9,dt,.001);
+ if(strength!==shelfGlow.strength.value){shelfGlow.strength.value=strength;sceneDirty=true}
 }
 
 main.addEventListener('pointerdown',e=>{
@@ -103,18 +123,18 @@ main.addEventListener('pointermove',e=>{
  if(!drag.moved&&Math.hypot(dx,dy)<6)return;
  if(!drag.moved){drag.moved=true;main.setPointerCapture(e.pointerId);main.classList.add('dragging')}
  shelfPivot.rotation.set(THREE.MathUtils.clamp(drag.pitch+dy*.003,-rotationLimit,rotationLimit),THREE.MathUtils.clamp(drag.yaw+dx*.003,-rotationLimit,rotationLimit),0,'YXZ');
- shelfPivot.updateMatrixWorld(true);updateHotspots();
+ shelfPivot.updateMatrixWorld(true);updateHotspots();sceneDirty=true;pointerDirty=true;
 });
 function finishDrag(e){if(!drag||e.pointerId!==drag.id)return;suppressCaseClick=drag.moved;drag=null;main.classList.remove('dragging');if(main.hasPointerCapture(e.pointerId))main.releasePointerCapture(e.pointerId)}
 main.addEventListener('pointerup',finishDrag);main.addEventListener('pointercancel',finishDrag);
 main.addEventListener('click',e=>{if(suppressCaseClick&&e.detail>0){e.preventDefault();e.stopImmediatePropagation();suppressCaseClick=false}},true);
 function lighting(s){s.add(new THREE.HemisphereLight(0xffffff,0xb0c4de,3));const l=new THREE.DirectionalLight(0xffffff,3);l.position.set(-2,4,5);s.add(l)}
 lighting(previewScene);
-function close(){target=0;dialog.dataset.phase='closing'}
+function close(){target=0;popupDirty=true;dialog.dataset.phase='closing'}
 dialog.querySelector('.close').onclick=close;
 dialog.addEventListener('cancel',e=>{e.preventDefault();close()});
 dialog.addEventListener('click',e=>{if(e.target===dialog||e.target.closest('.copy'))close()});
-dialog.addEventListener('close',()=>{if(selected)selected.visible=true;document.body.classList.remove('detail-active');activeButton?.focus();progress=target=0});
+dialog.addEventListener('close',()=>{if(selected)selected.visible=true;document.body.classList.remove('detail-active');activeButton?.focus();progress=target=0;sceneDirty=true;pointerDirty=true;});
 function frameFlight(){
  if(!selected||!dialog.open)return;
  camera.updateMatrixWorld();
@@ -140,11 +160,12 @@ function open(p,button){
  popupCorrection.copy(shelfPivot.quaternion).invert();flightOrigin.copy(center);
  casePivot=new THREE.Group();casePivot.position.copy(center);clone.position.sub(center);casePivot.add(clone);previewScene.add(casePivot);
  dialog.style.setProperty('--reveal',0);dialog.dataset.phase='opening';dialog.showModal();document.body.classList.add('detail-active');selected.visible=false;
- progress=0;target=1;resize();frameFlight();
+ progress=0;target=1;sceneDirty=true;popupDirty=true;pointerDirty=true;resize();frameFlight();
 }
 for(const p of projects){const button=document.createElement('button');button.setAttribute('aria-label',`Explore ${p.title}`);button.addEventListener('pointerenter',e=>{if(e.pointerType!=='touch')hoveredSlot=p.slot});button.addEventListener('pointerleave',()=>{if(hoveredSlot===p.slot)hoveredSlot=null});button.addEventListener('focus',()=>{if(button.matches(':focus-visible'))hoveredSlot=p.slot});button.addEventListener('blur',()=>{if(hoveredSlot===p.slot)hoveredSlot=null});button.onclick=()=>open(p,button);document.querySelector('#projects').append(button);buttons.set(p.slot,button)}
 function resize(){
  if(!renderer)return;
+ sceneDirty=popupDirty=pointerDirty=true;
  const w=innerWidth,h=innerHeight,aspect=w/h;
  renderer.setSize(w,h);previewRenderer.setSize(w,h);
  const width=Math.max(1.65,1.65*aspect/(16/9)),height=width/aspect;
@@ -158,24 +179,24 @@ function updateHotspots(){
 }
 const brand=document.querySelector('h1');brand.addEventListener('pointermove',e=>{const b=brand.getBoundingClientRect();brand.style.setProperty('--glow-x',e.clientX-b.left+'px');brand.style.setProperty('--glow-y',e.clientY-b.top+'px')});
 try{
- renderer=new THREE.WebGLRenderer({alpha:true,antialias:true});renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.setClearColor(0,0);document.querySelector('#scene').append(renderer.domElement);scene=new THREE.Scene();lighting(scene);camera=new THREE.OrthographicCamera();camera.near=.01;camera.far=20;
- previewCamera=new THREE.OrthographicCamera();previewRenderer=new THREE.WebGLRenderer({alpha:true,antialias:true});previewRenderer.setPixelRatio(Math.min(devicePixelRatio,2));document.querySelector('#case-preview').append(previewRenderer.domElement);
+ renderer=new THREE.WebGLRenderer({alpha:true,antialias:true});renderer.setPixelRatio(Math.min(devicePixelRatio,1.5));renderer.setClearColor(0,0);renderer.transmissionResolutionScale=.5;document.querySelector('#scene').append(renderer.domElement);scene=new THREE.Scene();lighting(scene);camera=new THREE.OrthographicCamera();camera.near=.01;camera.far=20;
+ previewCamera=new THREE.OrthographicCamera();previewRenderer=new THREE.WebGLRenderer({alpha:true,antialias:true});previewRenderer.setPixelRatio(Math.min(devicePixelRatio,1.5));previewRenderer.transmissionResolutionScale=.5;document.querySelector('#case-preview').append(previewRenderer.domElement);
  new GLTFLoader().load(asset('./models/shelf-with-slots.glb'),g=>{model=g.scene;shelfPivot=new THREE.Group();shelfPivot.position.set(0,.289,0);model.position.y=-.289;shelfPivot.add(model);scene.add(shelfPivot);installShelfGlow();for(const p of projects){const o=model.getObjectByName('Slot_'+p.slot);if(o){objects.set(p.slot,o);caseRestY.set(p.slot,o.position.y);installCaseEffects(p.slot,o)}}document.querySelector('#status').hidden=true;resize()},undefined,()=>{document.querySelector('#status').textContent='The shelf could not load. Please reload to try again.'});
  renderer.setAnimationLoop(time=>{
- const dt=Math.min((time-lastTime)/1000,.05);lastTime=time;
- updateCaseHover(dt);
- updateShelfGlow(dt);
- if(dialog.open){
- progress=reduced.matches?target:THREE.MathUtils.clamp(progress+(target?1:-1)*dt/transitionSeconds,0,1);
- const t=progress*progress*progress*(progress*(progress*6-15)+10);
- casePivot.position.lerpVectors(fromPosition,toPosition,t);
- casePivot.scale.setScalar(THREE.MathUtils.lerp(1,finalZoom,t));
- casePivot.quaternion.copy(popupCorrection);
- dialog.style.setProperty('--reveal',t);document.body.style.setProperty('--reveal',t);
- previewRenderer.render(previewScene,previewCamera);
- if(progress===0&&target===0){selected.visible=true;dialog.close()}else if(progress===1)dialog.dataset.phase='open';
+ const dt=Math.min((time-lastTime)/1000,.1);lastTime=time;
+ if(document.hidden)return;
+ if(pendingCursorLight){cursorLight.style.transform=`translate3d(${cursorX-120}px,${cursorY-120}px,0)`;cursorLight.classList.add('visible');pendingCursorLight=false}
+ updateCaseHover(dt);updateShelfGlow(dt);
+ if(dialog.open&&(progress!==target||popupDirty)){
+  progress=reduced.matches?target:THREE.MathUtils.clamp(progress+(target?1:-1)*dt/transitionSeconds,0,1);
+  const t=progress*progress*progress*(progress*(progress*6-15)+10);
+  casePivot.position.lerpVectors(fromPosition,toPosition,t);
+  casePivot.scale.setScalar(THREE.MathUtils.lerp(1,finalZoom,t));casePivot.quaternion.copy(popupCorrection);
+  dialog.style.setProperty('--reveal',t);document.body.style.setProperty('--reveal',t);
+  previewRenderer.render(previewScene,previewCamera);countDraw('popupDraws');popupDirty=false;
+  if(progress===0&&target===0){selected.visible=true;dialog.close();sceneDirty=true}else if(progress===1)dialog.dataset.phase='open';
  }
- renderer.render(scene,camera);
+ if(sceneDirty){renderer.render(scene,camera);countDraw('shelfDraws');sceneDirty=false}
  });resize();addEventListener('resize',resize);
 }catch(e){document.querySelector('#status').textContent='3D is unavailable in this browser.';document.querySelector('#projects').hidden=true;console.error(e)}
 
@@ -185,8 +206,7 @@ cursorLight.className='cursor-light';cursorLight.setAttribute('aria-hidden','tru
 document.body.append(cursorLight);
 function moveCursorLight(event){
  if(event.pointerType==='touch')return;
- cursorLight.style.left=event.clientX+'px';cursorLight.style.top=event.clientY+'px';
- cursorLight.classList.add('visible');
+ cursorX=event.clientX;cursorY=event.clientY;pendingCursorLight=true;
 }
 document.addEventListener('pointermove',moveCursorLight);
 document.documentElement.addEventListener('pointerleave',()=>cursorLight.classList.remove('visible'));
